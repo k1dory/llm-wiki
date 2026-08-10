@@ -1,23 +1,54 @@
-# Роутинг трёх доменов на три контейнера + автоматический HTTPS (Let's Encrypt).
-# Подставь свой домен вместо example.com (или задай {$WIKI_DOMAIN}).
+# Edge-прокси для LLM Wiki: три домена → три контейнера, HTTPS автоматом.
 #
-# Запуск как edge-прокси перед compose:
-#   docker run -d --name caddy --network llm-wiki_default \
-#     -p 80:80 -p 443:443 \
-#     -v $PWD/deploy/Caddyfile:/etc/caddy/Caddyfile \
-#     -v caddy-data:/data caddy:2
-
-wiki.{$WIKI_DOMAIN:example.com} {
-	reverse_proxy wiki:80
+# Схема доменов повторяет taskviewer: сама вики стоит на своём домене,
+# служебные хосты — поддоменами под ней.
+#
+#   wiki.<домен>       → UI          (контейнер wiki)
+#   api.wiki.<домен>   → REST        (контейнер api)
+#   mcp.wiki.<домен>   → MCP         (контейнер mcp)
+#
+# Домен задаётся переменной WIKI_DOMAIN в deploy/.env.
+# Запуск: cd deploy && docker compose up -d
+{
+	# Вложенные подстановки Caddy не понимает, поэтому почта задаётся целиком.
+	email {$ACME_EMAIL:admin@genomed-security.ru}
+	# Для отладки конфига без обращения к Let's Encrypt раскомментируй:
+	# acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
 }
 
-api.{$WIKI_DOMAIN:example.com} {
-	reverse_proxy api:8080
+(common) {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+	log {
+		output stdout
+		format console
+	}
 }
 
-mcp.{$WIKI_DOMAIN:example.com} {
-	# MCP по Streamable HTTP: POST /mcp
-	reverse_proxy mcp:8090 {
+# --- UI. Стоит обособленно: свой контейнер, свой апстрим, ничего больше не проксирует.
+wiki.{$WIKI_DOMAIN:genomed-security.ru} {
+	import common
+	reverse_proxy {$WIKI_UPSTREAM:wiki:80}
+}
+
+# --- REST API. Нужен только внешним клиентам: UI ходит в API через свой origin.
+api.wiki.{$WIKI_DOMAIN:genomed-security.ru} {
+	import common
+	reverse_proxy {$API_UPSTREAM:api:8080}
+}
+
+# --- MCP. Streamable HTTP: ответы приходят как SSE, буферизацию отключаем.
+mcp.wiki.{$WIKI_DOMAIN:genomed-security.ru} {
+	import common
+	reverse_proxy {$MCP_UPSTREAM:mcp:8090} {
 		flush_interval -1
+		transport http {
+			response_header_timeout 5m
+		}
 	}
 }

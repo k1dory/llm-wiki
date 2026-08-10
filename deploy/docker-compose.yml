@@ -1,0 +1,39 @@
+# Edge-прокси отдельным стеком: живёт своей жизнью, перезапускается независимо
+# от вики и подключается к её сети снаружи.
+#
+#   cd deploy && cp .env.example .env && docker compose up -d
+#
+# Основной стек (../docker-compose.yml) должен быть поднят — из него берётся сеть.
+name: llm-wiki-edge
+
+services:
+  caddy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    environment:
+      WIKI_DOMAIN: ${WIKI_DOMAIN:-genomed-security.ru}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+      # Апстримы можно переопределить, если контейнер стоит не в этой сети,
+      # например вынесенный на отдельный хост UI: WIKI_UPSTREAM=10.0.0.5:8080
+      WIKI_UPSTREAM: ${WIKI_UPSTREAM:-wiki:80}
+      API_UPSTREAM: ${API_UPSTREAM:-api:8080}
+      MCP_UPSTREAM: ${MCP_UPSTREAM:-mcp:8090}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data # сертификаты — переживают пересоздание контейнера
+      - caddy-config:/config
+    networks:
+      - wiki
+
+networks:
+  wiki:
+    external: true
+    name: llm-wiki_default
+
+volumes:
+  caddy-data:
+  caddy-config:
