@@ -1,19 +1,8 @@
-# Edge-прокси для LLM Wiki: три домена → три контейнера, HTTPS автоматом.
-#
-# Схема доменов повторяет taskviewer: сама вики стоит на своём домене,
-# служебные хосты — поддоменами под ней.
-#
-#   wiki.<домен>       → UI          (контейнер wiki)
-#   api.wiki.<домен>   → REST        (контейнер api)
-#   mcp.wiki.<домен>   → MCP         (контейнер mcp)
-#
-# Домен задаётся переменной WIKI_DOMAIN в deploy/.env.
-# Запуск: cd deploy && docker compose up -d
 {
 	# Вложенные подстановки Caddy не понимает, поэтому почта задаётся целиком.
-	email {$ACME_EMAIL:admin@genomed-security.ru}
+	email admin@infrashark.tech
 	# Для отладки конфига без обращения к Let's Encrypt раскомментируй:
-	# acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+	 acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
 }
 
 (common) {
@@ -31,19 +20,19 @@
 }
 
 # --- UI. Стоит обособленно: свой контейнер, свой апстрим, ничего больше не проксирует.
-wiki.{$WIKI_DOMAIN:genomed-security.ru} {
+wiki.{$WIKI_DOMAIN} {
 	import common
 	reverse_proxy {$WIKI_UPSTREAM:wiki:80}
 }
 
 # --- REST API. Нужен только внешним клиентам: UI ходит в API через свой origin.
-api.wiki.{$WIKI_DOMAIN:genomed-security.ru} {
+api.wiki.{$WIKI_DOMAIN} {
 	import common
 	reverse_proxy {$API_UPSTREAM:api:8080}
 }
 
 # --- MCP. Streamable HTTP: ответы приходят как SSE, буферизацию отключаем.
-mcp.wiki.{$WIKI_DOMAIN:genomed-security.ru} {
+mcp.wiki.{$WIKI_DOMAIN} {
 	import common
 	reverse_proxy {$MCP_UPSTREAM:mcp:8090} {
 		flush_interval -1
