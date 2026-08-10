@@ -1,0 +1,23 @@
+# Роутинг трёх доменов на три контейнера + автоматический HTTPS (Let's Encrypt).
+# Подставь свой домен вместо example.com (или задай {$WIKI_DOMAIN}).
+#
+# Запуск как edge-прокси перед compose:
+#   docker run -d --name caddy --network llm-wiki_default \
+#     -p 80:80 -p 443:443 \
+#     -v $PWD/deploy/Caddyfile:/etc/caddy/Caddyfile \
+#     -v caddy-data:/data caddy:2
+
+wiki.{$WIKI_DOMAIN:example.com} {
+	reverse_proxy wiki:80
+}
+
+api.{$WIKI_DOMAIN:example.com} {
+	reverse_proxy api:8080
+}
+
+mcp.{$WIKI_DOMAIN:example.com} {
+	# MCP по Streamable HTTP: POST /mcp
+	reverse_proxy mcp:8090 {
+		flush_interval -1
+	}
+}

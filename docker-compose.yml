@@ -1,0 +1,43 @@
+name: llm-wiki
+
+services:
+  api:
+    build: ./api
+    environment:
+      PORT: 8080
+      DB_PATH: /data/wiki.db
+      WRITE_TOKEN: ${WRITE_TOKEN:-}
+    volumes:
+      - wiki-data:/data
+    ports:
+      - "${API_PORT:-8081}:8080"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  mcp:
+    build: ./mcp
+    environment:
+      PORT: 8090
+      API_URL: http://api:8080
+      WRITE_TOKEN: ${WRITE_TOKEN:-}
+    ports:
+      - "${MCP_PORT:-8082}:8090"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  wiki:
+    build: ./web
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  wiki-data:
