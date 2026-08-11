@@ -10,8 +10,11 @@ server {
   location = /health { return 200 "ok\n"; add_header content-type text/plain; }
 
   # UI ходит в API через свой же origin — отдельный домен не обязателен.
+  # Токен подставляется здесь, а не в браузере: в JS его прятать бессмысленно,
+  # а сам UI закрыт basic-авторизацией на прокси.
   location /api/ {
     proxy_pass http://api:8080;
+    proxy_set_header Authorization "${WIKI_API_TOKEN}";
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_read_timeout 60s;

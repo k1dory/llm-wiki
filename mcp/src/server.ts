@@ -4,7 +4,7 @@ import {
   ListToolsRequestSchema,
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
-import { wiki } from "./wiki.js";
+import { createWiki } from "./wiki.js";
 
 const TOOLS: Tool[] = [
   {
@@ -106,7 +106,9 @@ function text(data: unknown) {
   };
 }
 
-export function createServer(): Server {
+export function createServer(authorization?: string): Server {
+  // Токен клиента живёт ровно в этом соединении: сервер создаётся на каждый запрос.
+  const wiki = createWiki(authorization);
   const server = new Server(
     { name: "llm-wiki", version: "1.0.0" },
     { capabilities: { tools: {} } },

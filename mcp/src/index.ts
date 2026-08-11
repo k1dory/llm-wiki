@@ -15,7 +15,7 @@ if (MODE === "stdio") {
   app.use(express.json({ limit: "4mb" }));
   app.use((_req, res, next) => {
     res.set("Access-Control-Allow-Origin", "*");
-    res.set("Access-Control-Allow-Headers", "content-type, mcp-session-id, mcp-protocol-version");
+    res.set("Access-Control-Allow-Headers", "content-type, authorization, mcp-session-id, mcp-protocol-version");
     res.set("Access-Control-Expose-Headers", "mcp-session-id");
     res.set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
     next();
@@ -26,7 +26,8 @@ if (MODE === "stdio") {
 
   // Streamable HTTP без сессий: на каждый запрос — свежий сервер и транспорт.
   app.post("/mcp", async (req, res) => {
-    const server = createServer();
+    // Заголовок клиента пробрасывается в API как есть — своих доступов MCP не держит.
+    const server = createServer(req.get("authorization"));
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
     });

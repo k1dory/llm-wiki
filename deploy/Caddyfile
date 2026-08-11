@@ -1,8 +1,17 @@
+# Edge-прокси для LLM Wiki: три домена → три контейнера, HTTPS автоматом.
+#
+#   wiki.<домен>       → UI   (контейнер wiki), закрыт паролем
+#   api.wiki.<домен>   → REST (контейнер api),  закрыт Bearer-токеном
+#   mcp.wiki.<домен>   → MCP  (контейнер mcp),  закрыт Bearer-токеном
+#
+# Переменные задаются в deploy/.env
+
 {
 	# Вложенные подстановки Caddy не понимает, поэтому почта задаётся целиком.
 	email admin@infrashark.tech
-	# Для отладки конфига без обращения к Let's Encrypt раскомментируй:
-	 acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+	# Для отладки выдачи сертификатов без траты лимитов Let's Encrypt.
+	# Держать раскомментированным нельзя: сертификаты будут недоверенными.
+	# acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
 }
 
 (common) {
@@ -20,18 +29,26 @@
 }
 
 # --- UI. Стоит обособленно: свой контейнер, свой апстрим, ничего больше не проксирует.
+# Просто так вики не посмотреть — сначала логин и пароль.
+# Хеш пароля:  docker run --rm caddy:2.8-alpine caddy hash-password --plaintext 'пароль'
 wiki.{$WIKI_DOMAIN} {
 	import common
+	basic_auth {
+		{$WIKI_USER:wiki} {$WIKI_PASSWORD_HASH}
+	}
 	reverse_proxy {$WIKI_UPSTREAM:wiki:80}
 }
 
 # --- REST API. Нужен только внешним клиентам: UI ходит в API через свой origin.
+# Пароля тут нет намеренно: доступ проверяет само API по Bearer-токену,
+# а второй заголовок Authorization на прокси сломал бы клиентов.
 api.wiki.{$WIKI_DOMAIN} {
 	import common
 	reverse_proxy {$API_UPSTREAM:api:8080}
 }
 
 # --- MCP. Streamable HTTP: ответы приходят как SSE, буферизацию отключаем.
+# Токен клиента MCP пробрасывает в API, поэтому анонимных читателей здесь тоже нет.
 mcp.wiki.{$WIKI_DOMAIN} {
 	import common
 	reverse_proxy {$MCP_UPSTREAM:mcp:8090} {

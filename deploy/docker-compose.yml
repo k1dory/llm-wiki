@@ -17,6 +17,10 @@ services:
     environment:
       WIKI_DOMAIN: ${WIKI_DOMAIN:-genomed-security.ru}
       ACME_EMAIL: ${ACME_EMAIL:-}
+      # Логин и bcrypt-хеш пароля на UI. Хеш содержит $, а compose трактует
+      # его как подстановку — в .env удваивай: $$2a$$14$$...
+      WIKI_USER: ${WIKI_USER:-wiki}
+      WIKI_PASSWORD_HASH: ${WIKI_PASSWORD_HASH:-}
       # Апстримы можно переопределить, если контейнер стоит не в этой сети,
       # например вынесенный на отдельный хост UI: WIKI_UPSTREAM=10.0.0.5:8080
       WIKI_UPSTREAM: ${WIKI_UPSTREAM:-wiki:80}

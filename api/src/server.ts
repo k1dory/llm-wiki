@@ -18,6 +18,9 @@ const app = express();
 const PORT = Number(process.env.PORT ?? 8080);
 // Токен на запись. Если не задан — пишет кто угодно (удобно локально, не для интернета).
 const WRITE_TOKEN = process.env.WRITE_TOKEN ?? "";
+// Токен на чтение. Пока не задан, вики читает кто угодно; задан — закрыта целиком.
+// Токен записи всегда даёт и чтение, отдельный read-токен нужен для клиентов «только смотреть».
+const READ_TOKEN = process.env.READ_TOKEN ?? "";
 
 app.use(express.json({ limit: "4mb" }));
 app.use((_req, res, next) => {
@@ -28,14 +31,26 @@ app.use((_req, res, next) => {
 });
 app.options("*", (_req, res) => res.sendStatus(204));
 
+const bearer = (req: Request) => (req.get("authorization") ?? "").replace(/^Bearer\s+/i, "");
+
 function requireWrite(req: Request, res: Response, next: NextFunction) {
   if (!WRITE_TOKEN) return next();
-  const auth = req.get("authorization") ?? "";
-  if (auth === `Bearer ${WRITE_TOKEN}`) return next();
+  if (bearer(req) === WRITE_TOKEN) return next();
   res.status(401).json({ error: "нужен Authorization: Bearer <WRITE_TOKEN>" });
 }
 
+function requireRead(req: Request, res: Response, next: NextFunction) {
+  if (!READ_TOKEN) return next();
+  const t = bearer(req);
+  if (t === READ_TOKEN || (WRITE_TOKEN && t === WRITE_TOKEN)) return next();
+  res.status(401).json({ error: "вики закрыта: нужен Authorization: Bearer <токен>" });
+}
+
+// /health отвечает без токена — на него смотрят healthcheck и мониторинг.
 app.get("/health", (_req, res) => res.json({ ok: true, ...stats() }));
+
+// Всё под /api закрыто read-токеном, если он задан.
+app.use("/api", requireRead);
 
 app.get("/api/pages", (req, res) => {
   const q = String(req.query.q ?? "").trim();
