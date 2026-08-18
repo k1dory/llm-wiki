@@ -1,7 +1,7 @@
 const API_URL = (process.env.API_URL ?? "http://api:8080").replace(/\/+$/, "");
 // Запасной токен из окружения. Нужен для stdio-режима, где заголовков нет.
 // В HTTP-режиме задавать его не стоит: тогда MCP пишет в вики без токена клиента.
-const FALLBACK_TOKEN = process.env.WRITE_TOKEN ?? "";
+const FALLBACK_TOKEN = process.env.TOKEN ?? process.env.WRITE_TOKEN ?? "";
 
 export type Wiki = ReturnType<typeof createWiki>;
 

@@ -4,7 +4,8 @@
 set -euo pipefail
 API="${1:-http://localhost:8081}"
 AUTH=()
-[ -n "${WRITE_TOKEN:-}" ] && AUTH=(-H "Authorization: Bearer $WRITE_TOKEN")
+TOKEN="${TOKEN:-${WRITE_TOKEN:-}}"   # WRITE_TOKEN — старое имя, ещё принимаем
+[ -n "$TOKEN" ] && AUTH=(-H "Authorization: Bearer $TOKEN")
 
 put() {
   # ${AUTH[@]+...} — иначе bash 3.2 (macOS) ругается на пустой массив под set -u

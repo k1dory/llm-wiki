@@ -218,6 +218,25 @@ const ctx = canvas.getContext("2d");
 const view = { x: 0, y: 0, k: 1 };
 let nodes = [], edges = [], drag = null, hover = null, raf = null;
 
+// Цвета графа берём из CSS-переменных — так канвас следует теме (тёмная/светлая).
+let theme = {};
+function readTheme() {
+  const s = getComputedStyle(document.documentElement);
+  const v = (name, fallback) => (s.getPropertyValue(name).trim() || fallback);
+  theme = {
+    accent: v("--accent", "#5aa2ff"),
+    line: v("--line", "#262d38"),
+    ghostFill: v("--bg-2", "#12161c"),
+    ghostStroke: v("--ghost", "#5b6472"),
+    active: v("--text", "#e8eaef"),
+    label: v("--text-2", "#b3bac7"),
+    labelDim: v("--muted", "#7f8895"),
+  };
+}
+readTheme();
+// Системная смена темы на лету.
+window.matchMedia?.("(prefers-color-scheme: dark)").addEventListener?.("change", () => { readTheme(); draw(); });
+
 function resize() {
   const r = canvas.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
@@ -246,7 +265,9 @@ function buildGraph() {
       x: old?.x ?? r.width / 2 + (Math.random() - 0.5) * 220,
       y: old?.y ?? r.height / 2 + (Math.random() - 0.5) * 220,
       vx: 0, vy: 0,
-      r: 4 + Math.min(7, n.degree * 1.3),
+      // Базовый размер по числу связей (экранных px при k=1). Фактический радиус
+      // при отрисовке считает worldR() с учётом зума — см. ниже.
+      r: 2.6 + Math.min(4, n.degree * 0.6),
     };
   });
   const byId = new Map(nodes.map((n) => [n.id, n]));
@@ -272,8 +293,8 @@ function simulate() {
       const b = nodes[j];
       let dx = b.x - a.x, dy = b.y - a.y;
       let d2 = dx * dx + dy * dy || 0.01;
-      if (d2 > 90000) continue; // дальние узлы друг друга не отталкивают
-      const f = 900 / d2;
+      if (d2 > 160000) continue; // дальние узлы друг друга не отталкивают
+      const f = 1500 / d2;
       const d = Math.sqrt(d2);
       const fx = (dx / d) * f, fy = (dy / d) * f;
       a.vx -= fx; a.vy -= fy; b.vx += fx; b.vy += fy;
@@ -282,7 +303,7 @@ function simulate() {
   for (const e of edges) {
     const dx = e.t.x - e.s.x, dy = e.t.y - e.s.y;
     const d = Math.hypot(dx, dy) || 0.01;
-    const f = (d - 90) * 0.01;
+    const f = (d - 120) * 0.01;
     const fx = (dx / d) * f, fy = (dy / d) * f;
     e.s.vx += fx; e.s.vy += fy; e.t.vx -= fx; e.t.vy -= fy;
   }
@@ -294,6 +315,15 @@ function simulate() {
     moved += Math.abs(n.vx) + Math.abs(n.vy);
   }
   energy = moved / Math.max(1, nodes.length);
+}
+
+// Радиус узла в МИРОВЫХ координатах для текущего зума.
+// На экране узел = worldR*k px: почти постоянный размер с потолком —
+// при отдалении (k<1) слегка растёт до R_MAX, при приближении (k>1) не пухнет.
+const R_MIN = 2.5, R_MAX = 12; // экранные px
+function worldR(n) {
+  const screen = Math.max(R_MIN, Math.min(R_MAX, n.r / Math.sqrt(view.k)));
+  return screen / view.k;
 }
 
 function draw() {
@@ -313,35 +343,41 @@ function draw() {
     near.add(focus);
   }
 
+  // Толщина линий и шрифт задаются в мировых единицах (ctx масштабируется на k),
+  // поэтому делим на k — так на экране они держат постоянный размер при любом зуме.
+  const px = 1 / view.k;
   for (const e of edges) {
     const lit = near.size && (near.has(e.s.id) && near.has(e.t.id));
-    ctx.strokeStyle = lit ? "#4f9cf9aa" : "#2e333d";
-    ctx.lineWidth = lit ? 1.6 : 1;
-    ctx.setLineDash(e.t.exists ? [] : [3, 3]);
+    ctx.strokeStyle = lit ? theme.accent : theme.line;
+    ctx.globalAlpha = lit ? 0.75 : 1;
+    ctx.lineWidth = (lit ? 1.6 : 1) * px;
+    ctx.setLineDash(e.t.exists ? [] : [3 * px, 3 * px]);
     ctx.beginPath();
     ctx.moveTo(e.s.x, e.s.y);
     ctx.lineTo(e.t.x, e.t.y);
     ctx.stroke();
   }
+  ctx.globalAlpha = 1;
   ctx.setLineDash([]);
 
   for (const n of nodes) {
     const active = n.id === state.slug;
     const dim = near.size && !near.has(n.id);
+    const rr = worldR(n);
     ctx.globalAlpha = dim ? 0.3 : 1;
     ctx.beginPath();
-    ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
-    ctx.fillStyle = active ? "#ffffff" : n.exists ? "#4f9cf9" : "#1b1e24";
+    ctx.arc(n.x, n.y, rr, 0, Math.PI * 2);
+    ctx.fillStyle = active ? theme.active : n.exists ? theme.accent : theme.ghostFill;
     ctx.fill();
-    if (!n.exists) { ctx.strokeStyle = "#6b7280"; ctx.lineWidth = 1.4; ctx.stroke(); }
-    if (active) { ctx.strokeStyle = "#4f9cf9"; ctx.lineWidth = 2.5; ctx.stroke(); }
+    if (!n.exists) { ctx.strokeStyle = theme.ghostStroke; ctx.lineWidth = 1.4 * px; ctx.stroke(); }
+    if (active) { ctx.strokeStyle = theme.accent; ctx.lineWidth = 2.5 * px; ctx.stroke(); }
 
     if (view.k > 0.55 && (n.degree > 0 || active || nodes.length < 60)) {
-      ctx.fillStyle = dim ? "#5b6270" : "#c9cfdb";
-      ctx.font = `${active ? 600 : 400} 11px -apple-system, sans-serif`;
+      ctx.fillStyle = dim ? theme.labelDim : theme.label;
+      ctx.font = `${active ? 600 : 400} ${11 * px}px -apple-system, sans-serif`;
       ctx.textAlign = "center";
       const label = n.title.length > 22 ? n.title.slice(0, 21) + "…" : n.title;
-      ctx.fillText(label, n.x, n.y + n.r + 12);
+      ctx.fillText(label, n.x, n.y + rr + 11 * px);
     }
     ctx.globalAlpha = 1;
   }
@@ -365,7 +401,8 @@ function toWorld(ev) {
 function nodeAt(p) {
   for (let i = nodes.length - 1; i >= 0; i--) {
     const n = nodes[i];
-    if ((n.x - p.x) ** 2 + (n.y - p.y) ** 2 <= (n.r + 6) ** 2) return n;
+    const rr = worldR(n) + 6 / view.k; // +6 экранных px на попадание
+    if ((n.x - p.x) ** 2 + (n.y - p.y) ** 2 <= rr * rr) return n;
   }
   return null;
 }

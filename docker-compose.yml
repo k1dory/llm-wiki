@@ -6,13 +6,19 @@ services:
     environment:
       PORT: 8080
       DB_PATH: /data/wiki.db
-      WRITE_TOKEN: ${WRITE_TOKEN:-}
-      # Задан — вики закрыта целиком: читать можно только с токеном.
+      # Основной токен (rw): и чтение, и запись. Задан — чтение тоже закрыто,
+      # аноним не читает. Пусто — вики полностью открыта (только для локалки).
+      # Fallback на WRITE_TOKEN — чтобы старый .env не открыл вику при передеплое.
+      TOKEN: ${TOKEN:-${WRITE_TOKEN:-}}
+      # Токен только на чтение (ro). Нужен зрителям, которым нельзя писать.
       READ_TOKEN: ${READ_TOKEN:-}
     volumes:
       - wiki-data:/data
     ports:
-      - "${API_PORT:-8081}:8080"
+      # ВАЖНО: по умолчанию порт слушает только 127.0.0.1 — наружу его отдаёт
+      # edge-Caddy через docker-сеть, а не публикация на хосте. Не ставь 0.0.0.0
+      # в проде: это откроет API в обход Caddy, basic-auth и READ_TOKEN.
+      - "${BIND_ADDR:-127.0.0.1}:${API_PORT:-8081}:8080"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
@@ -25,11 +31,12 @@ services:
     environment:
       PORT: 8090
       API_URL: http://api:8080
-      # WRITE_TOKEN здесь намеренно НЕ задан: токен приходит от клиента
-      # в заголовке Authorization и пробрасывается в API. Задашь его тут —
-      # и писать в вики сможет любой, кто знает адрес MCP.
+      # TOKEN здесь намеренно НЕ задан: токен приходит от клиента в заголовке
+      # Authorization и пробрасывается в API. Задашь его тут — и писать в вики
+      # сможет любой, кто знает адрес MCP.
     ports:
-      - "${MCP_PORT:-8082}:8090"
+      # См. комментарий у api: наружу отдаёт Caddy, на хосте — только loopback.
+      - "${BIND_ADDR:-127.0.0.1}:${MCP_PORT:-8082}:8090"
     depends_on:
       api:
         condition: service_healthy
@@ -39,10 +46,13 @@ services:
     build: ./web
     environment:
       # Токен, которым nginx подписывает запросы к API от имени UI.
-      # Нужен полный, а не read-only: в UI есть редактор.
-      WIKI_API_TOKEN: ${WRITE_TOKEN:+Bearer ${WRITE_TOKEN}}
+      # Нужен полный (rw), а не read-only: в UI есть редактор.
+      # Второе слагаемое — fallback на старое имя WRITE_TOKEN (одно из двух пусто).
+      WIKI_API_TOKEN: ${TOKEN:+Bearer ${TOKEN}}${WRITE_TOKEN:+Bearer ${WRITE_TOKEN}}
     ports:
-      - "${WEB_PORT:-8080}:80"
+      # См. комментарий у api. UI закрыт basic-auth только на Caddy — публиковать
+      # его на 0.0.0.0 нельзя, иначе UI и проксируемый им API открыты без пароля.
+      - "${BIND_ADDR:-127.0.0.1}:${WEB_PORT:-8080}:80"
     depends_on:
       - api
     restart: unless-stopped

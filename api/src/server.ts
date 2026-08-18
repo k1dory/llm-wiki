@@ -16,10 +16,14 @@ import {
 
 const app = express();
 const PORT = Number(process.env.PORT ?? 8080);
-// Токен на запись. Если не задан — пишет кто угодно (удобно локально, не для интернета).
-const WRITE_TOKEN = process.env.WRITE_TOKEN ?? "";
-// Токен на чтение. Пока не задан, вики читает кто угодно; задан — закрыта целиком.
-// Токен записи всегда даёт и чтение, отдельный read-токен нужен для клиентов «только смотреть».
+// Основной токен (rw): даёт и чтение, и запись. Им ходит агент (MCP) и подписывается UI.
+// Если не задан — пишет кто угодно (удобно локально, не для интернета).
+// WRITE_TOKEN — старое имя того же токена; поддержано для совместимости, можно убрать
+// после того, как .env везде переведён на TOKEN.
+const TOKEN = process.env.TOKEN ?? process.env.WRITE_TOKEN ?? "";
+// Токен только на чтение (ro). Чтение закрывается, как только задан ЛЮБОЙ токен
+// (TOKEN или READ_TOKEN); оба пусты — вики читает кто угодно. Основной TOKEN (rw)
+// наследует чтение, поэтому READ_TOKEN нужен лишь чтобы выдать чтение без записи.
 const READ_TOKEN = process.env.READ_TOKEN ?? "";
 
 app.use(express.json({ limit: "4mb" }));
@@ -34,15 +38,16 @@ app.options("*", (_req, res) => res.sendStatus(204));
 const bearer = (req: Request) => (req.get("authorization") ?? "").replace(/^Bearer\s+/i, "");
 
 function requireWrite(req: Request, res: Response, next: NextFunction) {
-  if (!WRITE_TOKEN) return next();
-  if (bearer(req) === WRITE_TOKEN) return next();
-  res.status(401).json({ error: "нужен Authorization: Bearer <WRITE_TOKEN>" });
+  if (!TOKEN) return next();
+  if (bearer(req) === TOKEN) return next();
+  res.status(401).json({ error: "нужен Authorization: Bearer <TOKEN> (rw)" });
 }
 
 function requireRead(req: Request, res: Response, next: NextFunction) {
-  if (!READ_TOKEN) return next();
+  if (!READ_TOKEN && !TOKEN) return next();
   const t = bearer(req);
-  if (t === READ_TOKEN || (WRITE_TOKEN && t === WRITE_TOKEN)) return next();
+  // rw-токен наследует чтение; отдельный read-токен — только чтение.
+  if ((TOKEN && t === TOKEN) || (READ_TOKEN && t === READ_TOKEN)) return next();
   res.status(401).json({ error: "вики закрыта: нужен Authorization: Bearer <токен>" });
 }
 
@@ -103,5 +108,8 @@ app.get("/api/tags", (_req, res) => res.json({ tags: allTags() }));
 app.get("/api/stats", (_req, res) => res.json(stats()));
 
 app.listen(PORT, () => {
-  console.log(`[api] слушает :${PORT}, запись ${WRITE_TOKEN ? "по токену" : "открыта"}`);
+  console.log(
+    `[api] слушает :${PORT}, запись ${TOKEN ? "по токену" : "открыта"}, ` +
+      `чтение ${TOKEN || READ_TOKEN ? "по токену" : "открыто"}`,
+  );
 });
