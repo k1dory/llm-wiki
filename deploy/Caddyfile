@@ -39,6 +39,10 @@ wiki.{$WIKI_DOMAIN} {
 	reverse_proxy {$WIKI_UPSTREAM:wiki:80}
 }
 
+# --- Дополнительные сайты (например, рабочая часть вики — sites/work.caddy.example).
+# Импорт по маске: пока файлов нет, ничего не меняется.
+import /etc/caddy/sites/*.caddy
+
 # --- REST API. Нужен только внешним клиентам: UI ходит в API через свой origin.
 # Пароля тут нет намеренно: доступ проверяет само API по Bearer-токену,
 # а второй заголовок Authorization на прокси сломал бы клиентов.

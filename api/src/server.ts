@@ -12,7 +12,9 @@ import {
   slugify,
   stats,
   upsertPage,
+  visible,
 } from "./db.js";
+import type { Scope } from "./db.js";
 
 const app = express();
 const PORT = Number(process.env.PORT ?? 8080);
@@ -25,6 +27,19 @@ const TOKEN = process.env.TOKEN ?? process.env.WRITE_TOKEN ?? "";
 // (TOKEN или READ_TOKEN); оба пусты — вики читает кто угодно. Основной TOKEN (rw)
 // наследует чтение, поэтому READ_TOKEN нужен лишь чтобы выдать чтение без записи.
 const READ_TOKEN = process.env.READ_TOKEN ?? "";
+// Токены с областью: только чтение и только страниц с заданным тегом.
+// Формат: "тег=токен", несколько через пробел или «;» — например "work=abc123".
+// Страница без нужного тега для такого токена не существует: её нет ни в списке,
+// ни в поиске, ни в графе, ни в обратных ссылках, а прямое чтение отдаёт 404.
+const SCOPED = new Map<string, string>(); // токен → тег
+for (const pair of (process.env.SCOPED_TOKENS ?? "").split(/[\s;]+/).filter(Boolean)) {
+  const i = pair.indexOf("=");
+  const tag = pair.slice(0, i).trim();
+  const tok = pair.slice(i + 1).trim();
+  if (i <= 0 || !tag || !tok) throw new Error(`SCOPED_TOKENS: ожидается тег=токен, получено «${pair}»`);
+  if (tok === TOKEN || tok === READ_TOKEN) throw new Error(`SCOPED_TOKENS: токен области «${tag}» совпадает с TOKEN/READ_TOKEN`);
+  SCOPED.set(tok, tag);
+}
 
 app.use(express.json({ limit: "4mb" }));
 app.use((_req, res, next) => {
@@ -38,18 +53,31 @@ app.options("*", (_req, res) => res.sendStatus(204));
 const bearer = (req: Request) => (req.get("authorization") ?? "").replace(/^Bearer\s+/i, "");
 
 function requireWrite(req: Request, res: Response, next: NextFunction) {
+  // Токен области — только чтение, даже если основной TOKEN не задан.
+  if (SCOPED.has(bearer(req))) {
+    return res.status(403).json({ error: "токен области только на чтение" });
+  }
   if (!TOKEN) return next();
   if (bearer(req) === TOKEN) return next();
   res.status(401).json({ error: "нужен Authorization: Bearer <TOKEN> (rw)" });
 }
 
 function requireRead(req: Request, res: Response, next: NextFunction) {
-  if (!READ_TOKEN && !TOKEN) return next();
   const t = bearer(req);
+  res.locals.scope = null;
+  // Токен области проверяется первым и всегда — даже на открытой локальной вики
+  // он не должен давать больше, чем свой тег.
+  if (t && SCOPED.has(t)) {
+    res.locals.scope = SCOPED.get(t)!;
+    return next();
+  }
+  if (!READ_TOKEN && !TOKEN && SCOPED.size === 0) return next();
   // rw-токен наследует чтение; отдельный read-токен — только чтение.
   if ((TOKEN && t === TOKEN) || (READ_TOKEN && t === READ_TOKEN)) return next();
   res.status(401).json({ error: "вики закрыта: нужен Authorization: Bearer <токен>" });
 }
+
+const scopeOf = (res: Response): Scope => res.locals.scope ?? null;
 
 // /health отвечает без токена — на него смотрят healthcheck и мониторинг.
 app.get("/health", (_req, res) => res.json({ ok: true, ...stats() }));
@@ -60,9 +88,10 @@ app.use("/api", requireRead);
 app.get("/api/pages", (req, res) => {
   const q = String(req.query.q ?? "").trim();
   const limit = Math.min(Number(req.query.limit ?? 100) || 100, 500);
-  if (q) return res.json({ results: search(q, limit), query: q });
+  const scope = scopeOf(res);
+  if (q) return res.json({ results: search(q, limit, scope), query: q });
   res.json({
-    results: listPages(limit, Number(req.query.offset ?? 0) || 0).map((p) => ({
+    results: listPages(limit, Number(req.query.offset ?? 0) || 0, scope).map((p) => ({
       slug: p.slug,
       title: p.title,
       tags: p.tags,
@@ -73,13 +102,16 @@ app.get("/api/pages", (req, res) => {
 
 app.get("/api/pages/:slug", (req, res) => {
   const slug = slugify(req.params.slug);
+  const scope = scopeOf(res);
   const page = getPage(slug);
-  if (!page) return res.status(404).json({ error: "страница не найдена", slug });
+  // Скрытая страница неотличима от несуществующей — тот же 404.
+  if (!page || !visible(page.tags, scope))
+    return res.status(404).json({ error: "страница не найдена", slug });
   res.json({
     ...page,
     tags: page.tags ? page.tags.split(",") : [],
-    links: outlinks(slug),
-    backlinks: backlinks(slug),
+    links: outlinks(slug, scope),
+    backlinks: backlinks(slug, scope),
   });
 });
 
@@ -103,13 +135,14 @@ app.delete("/api/pages/:slug", requireWrite, (req, res) => {
   res.json({ ok: true });
 });
 
-app.get("/api/graph", (_req, res) => res.json(graph()));
-app.get("/api/tags", (_req, res) => res.json({ tags: allTags() }));
-app.get("/api/stats", (_req, res) => res.json(stats()));
+app.get("/api/graph", (_req, res) => res.json(graph(scopeOf(res))));
+app.get("/api/tags", (_req, res) => res.json({ tags: allTags(scopeOf(res)) }));
+app.get("/api/stats", (_req, res) => res.json(stats(scopeOf(res))));
 
 app.listen(PORT, () => {
   console.log(
     `[api] слушает :${PORT}, запись ${TOKEN ? "по токену" : "открыта"}, ` +
-      `чтение ${TOKEN || READ_TOKEN ? "по токену" : "открыто"}`,
+      `чтение ${TOKEN || READ_TOKEN ? "по токену" : "открыто"}` +
+      (SCOPED.size ? `, токенов области: ${SCOPED.size} (${[...new Set(SCOPED.values())].join(", ")})` : ""),
   );
 });

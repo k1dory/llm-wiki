@@ -12,6 +12,9 @@ services:
       TOKEN: ${TOKEN:-${WRITE_TOKEN:-}}
       # Токен только на чтение (ro). Нужен зрителям, которым нельзя писать.
       READ_TOKEN: ${READ_TOKEN:-}
+      # Токены области: «тег=токен» — только чтение и только страниц с этим тегом.
+      # WORK_TOKEN открывает коллегам рабочую часть (тег work), личное им не видно.
+      SCOPED_TOKENS: ${WORK_TOKEN:+work=${WORK_TOKEN}}
     volumes:
       - wiki-data:/data
     ports:
@@ -53,6 +56,18 @@ services:
       # См. комментарий у api. UI закрыт basic-auth только на Caddy — публиковать
       # его на 0.0.0.0 нельзя, иначе UI и проксируемый им API открыты без пароля.
       - "${BIND_ADDR:-127.0.0.1}:${WEB_PORT:-8080}:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  # UI рабочей части для коллег: тот же образ, но подписан токеном области.
+  # Без WORK_TOKEN каждый запрос к API получит 401 — открыть больше он не может.
+  wiki-work:
+    build: ./web
+    environment:
+      WIKI_API_TOKEN: ${WORK_TOKEN:+Bearer ${WORK_TOKEN}}
+    ports:
+      - "${BIND_ADDR:-127.0.0.1}:${WORK_WEB_PORT:-8083}:80"
     depends_on:
       - api
     restart: unless-stopped

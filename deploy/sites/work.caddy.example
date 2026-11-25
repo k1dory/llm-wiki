@@ -1,0 +1,15 @@
+# Рабочая часть вики для коллег: отдельный домен, свой логин, свой UI-контейнер.
+# Этот UI подписывает запросы токеном области (WORK_TOKEN), поэтому видит только
+# страницы с тегом work и ничего не может записать.
+#
+# Включение: задать WORK_USER и WORK_PASSWORD_HASH в deploy/.env, затем
+#   cp sites/work.caddy.example sites/work.caddy && docker compose up -d
+# Файл подключается по маске *.caddy: пока его нет, edge работает как раньше.
+# Пустой хеш Caddy не принимает и падает целиком — поэтому блок и вынесен сюда.
+work.wiki.{$WIKI_DOMAIN} {
+	import common
+	basic_auth {
+		{$WORK_USER} {$WORK_PASSWORD_HASH}
+	}
+	reverse_proxy {$WORK_UPSTREAM:wiki-work:80}
+}

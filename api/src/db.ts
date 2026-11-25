@@ -36,6 +36,25 @@ CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(
 );
 `);
 
+/**
+ * Область видимости: null — видно всё; строка — видны только страницы с этим тегом.
+ * Нужна для токенов с ограниченным доступом (например, рабочая часть вики для коллег).
+ */
+export type Scope = string | null;
+
+export function tagList(tags: string): string[] {
+  return tags.split(",").map((t) => t.trim()).filter(Boolean);
+}
+
+export function visible(tags: string, scope: Scope): boolean {
+  return scope === null || tagList(tags).includes(scope);
+}
+
+// Та же проверка внутри SQL, чтобы LIMIT/OFFSET и поиск считались уже по видимым страницам.
+db.function("visible", { deterministic: true }, (tags: unknown, scope: unknown) =>
+  visible(String(tags ?? ""), scope == null ? null : String(scope)) ? 1 : 0,
+);
+
 export type Page = {
   slug: string;
   title: string;
@@ -95,12 +114,12 @@ export function getPage(slug: string): Page | undefined {
     | undefined;
 }
 
-export function listPages(limit = 200, offset = 0): Page[] {
+export function listPages(limit = 200, offset = 0, scope: Scope = null): Page[] {
   return db
     .prepare(
-      "SELECT * FROM pages ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+      "SELECT * FROM pages WHERE visible(tags, ?) ORDER BY updated_at DESC LIMIT ? OFFSET ?",
     )
-    .all(limit, offset) as Page[];
+    .all(scope, limit, offset) as Page[];
 }
 
 export function upsertPage(input: {
@@ -146,7 +165,7 @@ export type SearchHit = {
   snippet: string;
 };
 
-export function search(query: string, limit = 30): SearchHit[] {
+export function search(query: string, limit = 30, scope: Scope = null): SearchHit[] {
   const q = query.trim();
   if (!q) return [];
   // Префиксный поиск по каждому слову: "граф свя" -> "граф*" AND "свя*"
@@ -164,34 +183,40 @@ export function search(query: string, limit = 30): SearchHit[] {
         `SELECT f.slug, p.title, p.tags,
                 snippet(pages_fts, 2, char(2), char(3), '…', 12) AS snippet
          FROM pages_fts f JOIN pages p ON p.slug = f.slug
-         WHERE pages_fts MATCH ?
+         WHERE pages_fts MATCH ? AND visible(p.tags, ?)
          ORDER BY rank
          LIMIT ?`,
       )
-      .all(fts, limit) as SearchHit[];
+      .all(fts, scope, limit) as SearchHit[];
   } catch {
     return [];
   }
 }
 
-export function backlinks(slug: string) {
+export function backlinks(slug: string, scope: Scope = null) {
   return db
     .prepare(
       `SELECT l.src AS slug, p.title
        FROM links l JOIN pages p ON p.slug = l.src
-       WHERE l.dst = ? ORDER BY p.title`,
+       WHERE l.dst = ? AND visible(p.tags, ?) ORDER BY p.title`,
     )
-    .all(slug) as { slug: string; title: string }[];
+    .all(slug, scope) as { slug: string; title: string }[];
 }
 
-export function outlinks(slug: string) {
+/**
+ * Исходящие ссылки. Ссылка на существующую, но невидимую в области страницу
+ * выкидывается целиком — иначе её заголовок утёк бы через JOIN.
+ * Висячие ссылки (страницы нет) остаются: их slug и так виден в тексте.
+ */
+export function outlinks(slug: string, scope: Scope = null) {
   return db
     .prepare(
       `SELECT l.dst AS slug, l.label, p.title AS title
        FROM links l LEFT JOIN pages p ON p.slug = l.dst
-       WHERE l.src = ? ORDER BY l.dst`,
+       WHERE l.src = ? AND (p.slug IS NULL OR visible(p.tags, ?))
+       ORDER BY l.dst`,
     )
-    .all(slug) as { slug: string; label: string; title: string | null }[];
+    .all(slug, scope) as { slug: string; label: string; title: string | null }[];
 }
 
 export type Graph = {
@@ -205,13 +230,20 @@ export type Graph = {
   edges: { source: string; target: string; label: string }[];
 };
 
-export function graph(): Graph {
-  const pages = db
+export function graph(scope: Scope = null): Graph {
+  const all = db
     .prepare("SELECT slug, title, tags FROM pages")
     .all() as { slug: string; title: string; tags: string }[];
-  const edges = db
-    .prepare("SELECT src AS source, dst AS target, label FROM links")
-    .all() as { source: string; target: string; label: string }[];
+  const pages = all.filter((p) => visible(p.tags, scope));
+  const shown = new Set(pages.map((p) => p.slug));
+  const hidden = new Set(all.filter((p) => !shown.has(p.slug)).map((p) => p.slug));
+  // Ребро остаётся, только если источник видим, а цель видима или не существует:
+  // скрытая страница не должна проявиться ни узлом, ни «призраком».
+  const edges = (
+    db
+      .prepare("SELECT src AS source, dst AS target, label FROM links")
+      .all() as { source: string; target: string; label: string }[]
+  ).filter((e) => shown.has(e.source) && !hidden.has(e.target));
 
   const nodes = new Map<string, Graph["nodes"][number]>();
   for (const p of pages) {
@@ -240,8 +272,10 @@ export function graph(): Graph {
   return { nodes: [...nodes.values()], edges };
 }
 
-export function allTags(): { tag: string; count: number }[] {
-  const rows = db.prepare("SELECT tags FROM pages WHERE tags != ''").all() as {
+export function allTags(scope: Scope = null): { tag: string; count: number }[] {
+  const rows = db
+    .prepare("SELECT tags FROM pages WHERE tags != '' AND visible(tags, ?)")
+    .all(scope) as {
     tags: string;
   }[];
   const counts = new Map<string, number>();
@@ -255,7 +289,12 @@ export function allTags(): { tag: string; count: number }[] {
     .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
 }
 
-export function stats() {
+export function stats(scope: Scope = null) {
+  if (scope !== null) {
+    // Для области — только размер видимой части, без сирот по всей базе.
+    const g = graph(scope);
+    return { pages: g.nodes.filter((n) => n.exists).length, links: g.edges.length };
+  }
   const pages = (db.prepare("SELECT count(*) c FROM pages").get() as any).c;
   const links = (db.prepare("SELECT count(*) c FROM links").get() as any).c;
   const orphans = (
