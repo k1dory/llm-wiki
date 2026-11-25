@@ -31,17 +31,22 @@
 # --- UI. Стоит обособленно: свой контейнер, свой апстрим, ничего больше не проксирует.
 # Просто так вики не посмотреть — сначала логин и пароль.
 # Хеш пароля:  docker run --rm caddy:2.8-alpine caddy hash-password --plaintext 'пароль'
+#
+# Рабочая часть для коллег живёт на том же домене: их логины подключаются из
+# sites/*.users, а sites/*.route уводит их в отдельный UI (см. *.example).
+# Импорт по маске: пока файлов нет, всё как раньше. Вынесено в файлы потому,
+# что пустой хеш в basic_auth Caddy не принимает и не стартует целиком.
 wiki.{$WIKI_DOMAIN} {
 	import common
 	basic_auth {
 		{$WIKI_USER:wiki} {$WIKI_PASSWORD_HASH}
+		import /etc/caddy/sites/*.users
 	}
-	reverse_proxy {$WIKI_UPSTREAM:wiki:80}
+	import /etc/caddy/sites/*.route
+	handle {
+		reverse_proxy {$WIKI_UPSTREAM:wiki:80}
+	}
 }
-
-# --- Дополнительные сайты (например, рабочая часть вики — sites/work.caddy.example).
-# Импорт по маске: пока файлов нет, ничего не меняется.
-import /etc/caddy/sites/*.caddy
 
 # --- REST API. Нужен только внешним клиентам: UI ходит в API через свой origin.
 # Пароля тут нет намеренно: доступ проверяет само API по Bearer-токену,

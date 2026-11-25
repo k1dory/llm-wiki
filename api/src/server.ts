@@ -11,6 +11,7 @@ import {
   search,
   slugify,
   stats,
+  tagList,
   upsertPage,
   visible,
 } from "./db.js";
@@ -27,7 +28,8 @@ const TOKEN = process.env.TOKEN ?? process.env.WRITE_TOKEN ?? "";
 // (TOKEN или READ_TOKEN); оба пусты — вики читает кто угодно. Основной TOKEN (rw)
 // наследует чтение, поэтому READ_TOKEN нужен лишь чтобы выдать чтение без записи.
 const READ_TOKEN = process.env.READ_TOKEN ?? "";
-// Токены с областью: только чтение и только страниц с заданным тегом.
+// Токены с областью: чтение и запись только страниц с заданным тегом.
+// Записанная таким токеном страница всегда получает его тег.
 // Формат: "тег=токен", несколько через пробел или «;» — например "work=abc123".
 // Страница без нужного тега для такого токена не существует: её нет ни в списке,
 // ни в поиске, ни в графе, ни в обратных ссылках, а прямое чтение отдаёт 404.
@@ -53,9 +55,13 @@ app.options("*", (_req, res) => res.sendStatus(204));
 const bearer = (req: Request) => (req.get("authorization") ?? "").replace(/^Bearer\s+/i, "");
 
 function requireWrite(req: Request, res: Response, next: NextFunction) {
-  // Токен области — только чтение, даже если основной TOKEN не задан.
-  if (SCOPED.has(bearer(req))) {
-    return res.status(403).json({ error: "токен области только на чтение" });
+  res.locals.scope = null;
+  // Токен области пишет только внутри своего тега: чужие страницы ему не
+  // перезаписать и не удалить, а новые получают тег области автоматически.
+  const t = bearer(req);
+  if (t && SCOPED.has(t)) {
+    res.locals.scope = SCOPED.get(t)!;
+    return next();
   }
   if (!TOKEN) return next();
   if (bearer(req) === TOKEN) return next();
@@ -115,13 +121,32 @@ app.get("/api/pages/:slug", (req, res) => {
   });
 });
 
+// Теги в любом виде, в котором их принимает upsertPage, — массивом.
+function tagsOf(input: unknown, fallback: string): string[] {
+  if (Array.isArray(input)) return input.map((t) => String(t).trim()).filter(Boolean);
+  return tagList(typeof input === "string" ? input : fallback);
+}
+
 app.put("/api/pages/:slug", requireWrite, (req, res) => {
   try {
+    const scope = scopeOf(res);
+    let tags = req.body?.tags;
+    if (scope !== null) {
+      const existing = getPage(slugify(req.params.slug));
+      // Страница вне области: перезаписать её нельзя. Отвечаем «занято», не раскрывая
+      // ни заголовка, ни содержимого — только то, что этот slug не свободен.
+      if (existing && !visible(existing.tags, scope))
+        return res.status(409).json({ error: "slug занят, выбери другой" });
+      // Тег области ставится всегда: иначе страница пропала бы у автора из вида,
+      // а снять его — значит увести страницу из рабочей части в личную.
+      const list = tagsOf(tags, existing?.tags ?? "");
+      tags = list.includes(scope) ? list : [...list, scope];
+    }
     const page = upsertPage({
       slug: req.params.slug,
       title: req.body?.title,
       content: req.body?.content,
-      tags: req.body?.tags,
+      tags,
     });
     res.json({ ...page, tags: page.tags ? page.tags.split(",") : [] });
   } catch (e) {
@@ -130,7 +155,15 @@ app.put("/api/pages/:slug", requireWrite, (req, res) => {
 });
 
 app.delete("/api/pages/:slug", requireWrite, (req, res) => {
-  const ok = deletePage(slugify(req.params.slug));
+  const slug = slugify(req.params.slug);
+  const scope = scopeOf(res);
+  if (scope !== null) {
+    const page = getPage(slug);
+    // Как и при чтении: страница вне области неотличима от несуществующей.
+    if (!page || !visible(page.tags, scope))
+      return res.status(404).json({ error: "страница не найдена" });
+  }
+  const ok = deletePage(slug);
   if (!ok) return res.status(404).json({ error: "страница не найдена" });
   res.json({ ok: true });
 });

@@ -1,0 +1,6 @@
+# Коллеги под логином WORK_USER попадают в UI рабочей части (контейнер wiki-work):
+# он подписывает запросы токеном области и видит только страницы с тегом work.
+@work vars {http.auth.user.id} {$WORK_USER}
+handle @work {
+	reverse_proxy {$WORK_UPSTREAM:wiki-work:80}
+}

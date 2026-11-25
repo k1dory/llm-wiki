@@ -39,8 +39,18 @@ check "исходящие без личной"     '! w /api/pages/rab | python3
 check "висячая ссылка осталась"  'w /api/pages/rab | grep -q "нет-такой"'
 check "граф без личной"          '! w /api/graph | grep -qE "ЛичныйЗаголовок|\"лич\""'
 check "теги без roblox"          '! w /api/tags | grep -q roblox'
-check "запись запрещена"         '[ "$(curl -s -o /dev/null -w %{http_code} -X PUT "$API/api/pages/x" -H "authorization: Bearer $WT" -H content-type:application/json -d "{}")" = 403 ]'
-check "удаление запрещено"       '[ "$(curl -s -o /dev/null -w %{http_code} -X DELETE "$API/api/pages/rab" -H "authorization: Bearer $WT")" = 403 ]'
+code() { curl -s -o /dev/null -w %{http_code} "$@"; }
+wput() { code -X PUT "$API/api/pages/$1" -H "authorization: Bearer $WT" -H content-type:application/json -d "$2"; }
+check "запись новой страницы"    '[ "$(wput kol "{\"title\":\"От коллеги\",\"tags\":[\"argus\"],\"content\":\"x\"}")" = 200 ]'
+check "новой поставлен тег work" 'w /api/pages/kol | grep -q "\"work\""'
+check "без тегов тоже work"      '[ "$(wput kol2 "{\"content\":\"y\"}")" = 200 ] && w /api/pages/kol2 | grep -q "\"work\""'
+check "снять work нельзя"        '[ "$(wput rab "{\"tags\":[\"genomed\"]}")" = 200 ] && w /api/pages/rab | grep -q "\"work\""'
+check "перезапись личной = 409"  '[ "$(wput лич "{\"content\":\"взлом\",\"tags\":[\"work\"]}")" = 409 ]'
+check "личная не тронута"        'curl -s "$API/api/pages/лич" -H "authorization: Bearer $RW" | grep -q "секрет-слово" && ! curl -s "$API/api/pages/лич" -H "authorization: Bearer $RW" | grep -q "\"work\""'
+check "удаление личной = 404"    '[ "$(code -X DELETE "$API/api/pages/лич" -H "authorization: Bearer $WT")" = 404 ]'
+check "личная на месте"          '[ "$(code "$API/api/pages/лич" -H "authorization: Bearer $RW")" = 200 ]'
+check "удаление своей"           '[ "$(code -X DELETE "$API/api/pages/kol2" -H "authorization: Bearer $WT")" = 200 ]'
+check "чужой токен не пишет"     '[ "$(code -X PUT "$API/api/pages/z" -H "authorization: Bearer nope" -H content-type:application/json -d "{}")" = 401 ]'
 check "без токена 401"           '[ "$(curl -s -o /dev/null -w %{http_code} "$API/api/pages")" = 401 ]'
 check "rw видит личную"          'curl -s "$API/api/pages/лич" -H "authorization: Bearer $RW" | grep -q ЛичныйЗаголовок'
 

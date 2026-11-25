@@ -26,7 +26,7 @@ services:
       WIKI_UPSTREAM: ${WIKI_UPSTREAM:-wiki:80}
       API_UPSTREAM: ${API_UPSTREAM:-api:8080}
       MCP_UPSTREAM: ${MCP_UPSTREAM:-mcp:8090}
-      # Рабочая часть вики (sites/work.caddy): логин коллег и bcrypt-хеш, $ удваивать.
+      # Рабочая часть вики (sites/work.*): логин коллег и bcrypt-хеш, $ удваивать.
       WORK_USER: ${WORK_USER:-}
       WORK_PASSWORD_HASH: ${WORK_PASSWORD_HASH:-}
       WORK_UPSTREAM: ${WORK_UPSTREAM:-wiki-work:80}
